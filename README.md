@@ -228,25 +228,24 @@ if (provider) {
 #### Using Individual Clients
 
 ```typescript
-import { ClaudeClient, GeminiClient, ZaiClient } from '@shaharia-lab/ai-limit-checker';
+import { ClaudeClient, GeminiClient, ZaiClient, getRunContext } from '@shaharia-lab/ai-limit-checker';
+
+const context = getRunContext();
 
 // Check only Claude
-const claudeClient = new ClaudeClient();
+const claudeClient = new ClaudeClient(context);
 const claudeStatus = await claudeClient.getUsageStats();
 console.log(`Claude session usage: ${claudeStatus.sessionUsed}%`);
 
 // Check only Gemini
-const geminiClient = new GeminiClient();
+const geminiClient = new GeminiClient(context);
 const geminiUsage = await geminiClient.getUsageStats();
 geminiUsage.forEach(model => {
   console.log(`${model.model}: ${model.usage}% (resets in ${model.resets})`);
 });
 
-// Check only z.ai (requires Chrome configuration)
-const zaiClient = new ZaiClient({
-  outputDir: process.env.CHROME_OUTPUT_DIR!,
-  userDataDir: process.env.CHROME_USER_DATA_DIR!,
-});
+// Check only z.ai
+const zaiClient = new ZaiClient(context);
 const zaiLimits = await zaiClient.getUsageQuota();
 const tokensLimit = zaiLimits.find(l => l.type === 'TOKENS_LIMIT');
 console.log(`z.ai tokens used: ${tokensLimit?.percentage}%`);
@@ -260,10 +259,13 @@ Each provider returns a status object with the following structure:
 
 ```typescript
 interface LlmLimitStatus {
-  provider: string;                           // Provider name: 'claude', 'gemini', or 'zai'
-  status: 'rate_limit_exceed' | 'available';  // Current status
-  resetAt?: number;                           // Unix timestamp (ms) when limit resets
-  resetAtHuman?: string;                      // ISO 8601 formatted date string
+  provider: string;                                      // Provider name: 'claude', 'gemini', or 'zai'
+  status: 'rate_limit_exceed' | 'available' | 'error';  // Current status
+  usagePercent?: number;                                 // Usage percentage (0-100)
+  resetAt?: number;                                      // Unix timestamp (ms) when limit resets
+  resetAtHuman?: string;                                 // ISO 8601 formatted date string
+  errorMessage?: string;                                 // Error message if status is 'error'
+  checkedAt: number;                                     // Unix timestamp (ms) when check was performed
 }
 ```
 
@@ -273,6 +275,38 @@ interface LlmLimitStatus {
 |--------|-------------|
 | `available` | Provider is operational and accepting requests |
 | `rate_limit_exceed` | Provider has reached its rate limit threshold |
+| `error` | Check failed - see `errorMessage` for details |
+
+### Example Output
+
+```json
+[
+  {
+    "provider": "claude",
+    "status": "available",
+    "usagePercent": 45,
+    "resetAt": 1704384000000,
+    "resetAtHuman": "2024-01-04T16:00:00.000Z",
+    "checkedAt": 1704380000000
+  },
+  {
+    "provider": "gemini",
+    "status": "available",
+    "usagePercent": 12,
+    "resetAt": 1704470400000,
+    "resetAtHuman": "2024-01-05T16:00:00.000Z",
+    "checkedAt": 1704380000001
+  },
+  {
+    "provider": "zai",
+    "status": "available",
+    "usagePercent": 9,
+    "resetAt": 1704412800000,
+    "resetAtHuman": "2024-01-05T00:00:00.000Z",
+    "checkedAt": 1704380000002
+  }
+]
+```
 
 ### Example Outputs
 
@@ -328,6 +362,39 @@ interface LlmLimitStatus {
 
 ## Configuration
 
+### Configuration File
+
+The tool loads configuration from `~/.config/ai-limit-checker/config.json`. If not present, sensible defaults are used.
+
+**Configuration Schema:**
+
+```json
+{
+  "runtimeRoot": "/path/to/runtime-root",
+  "inheritEnvAllowlist": [
+    "HOME", "PATH", "SHELL", "TERM", "LANG", "LC_ALL", "LC_CTYPE",
+    "TMPDIR", "SSH_AUTH_SOCK", "CLAUDE_API_KEY", "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY", "GOOGLE_API_KEY"
+  ],
+  "zai": {
+    "userDataDir": "/path/to/chrome-data",
+    "outputDir": "/path/to/chrome-output"
+  },
+  "timeoutsMs": {
+    "claude": 30000,
+    "gemini": 30000,
+    "zai": 45000
+  }
+}
+```
+
+**Configuration Options:**
+- `runtimeRoot`: Directory where provider subprocesses execute (isolated from project CWD)
+- `inheritEnvAllowlist`: Environment variables passed to provider subprocesses (others are filtered)
+- `zai.userDataDir`: Chrome user data directory for z.ai automation
+- `zai.outputDir`: Chrome output directory
+- `timeoutsMs`: Per-provider timeouts in milliseconds
+
 ### z.ai Chrome Setup
 
 z.ai requires Chrome browser automation using Playwright. Follow these steps:
@@ -335,52 +402,98 @@ z.ai requires Chrome browser automation using Playwright. Follow these steps:
 #### 1. Create Required Directories
 
 ```bash
-mkdir -p ~/.chrome-data
-mkdir -p ~/.chrome-output
+mkdir -p ~/.ai-limit-checker-root/chrome-data
 ```
 
 #### 2. Set Up Chrome User Data
 
-Launch Chrome with a persistent user data directory and log into z.ai:
+Launch Chrome with the persistent user data directory and log into z.ai:
 
 ```bash
-google-chrome --user-data-dir="$HOME/.chrome-data"
-```
+# macOS
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --user-data-dir="$HOME/.ai-limit-checker-root/chrome-data" https://z.ai/manage-apikey/subscription
 
-**Note**: On macOS, use:
-```bash
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --user-data-dir="$HOME/.chrome-data"
+# Linux
+google-chrome --user-data-dir="$HOME/.ai-limit-checker-root/chrome-data" https://z.ai/manage-apikey/subscription
 ```
 
 #### 3. Log into z.ai
 
-1. Navigate to [z.ai](https://z.ai)
-2. Complete the login process
-3. Close the browser window
+1. In the Chrome window that opens, log in to z.ai (Google, Email, or GitHub)
+2. Close the browser window when done
 
-#### 4. Set Environment Variables
+**Note:** The tool uses `--use-mock-keychain` to avoid repeated keychain password prompts on macOS.
 
-Add these to your shell profile (`~/.bashrc`, `~/.zshrc`, or `~/.profile`):
+#### 4. Verify Configuration
 
-```bash
-export CHROME_OUTPUT_DIR="$HOME/.chrome-output"
-export CHROME_USER_DATA_DIR="$HOME/.chrome-data"
+The config file at `~/.config/ai-limit-checker/config.json` should have:
+
+```json
+{
+  "zai": {
+    "userDataDir": "/Users/your-username/.ai-limit-checker-root/chrome-data"
+  }
+}
 ```
 
-Then reload your shell:
+If no config exists, defaults are used automatically.
 
-```bash
-source ~/.bashrc  # or ~/.zshrc
+## Security Model
+
+This tool handles sensitive API credentials and interacts with external providers. Here's how it keeps your data safe:
+
+### Environment Isolation
+
+Provider subprocesses run with a **filtered environment** - only variables in the `inheritEnvAllowlist` are passed. This prevents accidental leakage of unrelated environment variables.
+
+### Isolated Runtime Root
+
+All provider interactions execute from a configurable `runtimeRoot` directory, not your project's working directory. This prevents unintended file access.
+
+### No Debug Data Persistence
+
+- **Claude**: No longer writes debug output to `/tmp`
+- **Gemini**: Removed `--yolo` flag, uses safe interaction mode
+- **z.ai**: Uses configured directories only
+
+### Explicit Error Status
+
+Provider failures return `status: "error"` instead of silently returning `available`. This ensures you know when checks fail.
+
+```json
+{
+  "provider": "claude",
+  "status": "error",
+  "errorMessage": "CLI is not available on this system",
+  "checkedAt": 1704384000000
+}
 ```
 
-#### 5. Verify Configuration
+### Restrictive direnv Setup
+
+For maximum security, use direnv with the provided `.envrc` template:
 
 ```bash
-echo $CHROME_OUTPUT_DIR
-echo $CHROME_USER_DATA_DIR
+# Create runtime root
+mkdir -p /path/to/.ai-limit-checker-root
+cd /path/to/.ai-limit-checker-root
+
+# Copy the .envrc template and customize
+# Add your API keys to .envrc.private (gitignored)
 ```
 
-Both should output the paths you set.
+The `.envrc` setup:
+- Uses `strict_env` to block inherited environment
+- Keeps only essential variables (HOME, PATH, etc.)
+- Loads API keys from a private file
+- Enforces required API keys with `env_vars_required`
+
+### Best Practices
+
+1. **Never commit API keys** to version control
+2. **Use direnv** for isolated environments
+3. **Review the allowlist** before adding new environment variables
+4. **Monitor error statuses** in your automation scripts
 
 ### Alternative: Using .env File
 
@@ -432,7 +545,13 @@ const allLimits = await checkLimits();
 Client for checking Claude CLI usage.
 
 ```typescript
+import { ClaudeClient, getRunContext } from '@shaharia-lab/ai-limit-checker';
+
+const context = getRunContext();
+const client = new ClaudeClient(context);
+
 class ClaudeClient {
+  constructor(context: RunContext)
   async getUsageStats(): Promise<ClaudeStatusInfo>
 }
 
@@ -450,7 +569,13 @@ interface ClaudeStatusInfo {
 Client for checking Gemini CLI usage.
 
 ```typescript
+import { GeminiClient, getRunContext } from '@shaharia-lab/ai-limit-checker';
+
+const context = getRunContext();
+const client = new GeminiClient(context);
+
 class GeminiClient {
+  constructor(context: RunContext)
   async getUsageStats(): Promise<GeminiModelUsage[]>
 }
 
@@ -467,14 +592,14 @@ interface GeminiModelUsage {
 Client for checking z.ai usage via browser automation.
 
 ```typescript
-class ZaiClient {
-  constructor(config: ZaiConfig)
-  async getUsageQuota(): Promise<ZaiLimit[]>
-}
+import { ZaiClient, getRunContext } from '@shaharia-lab/ai-limit-checker';
 
-interface ZaiConfig {
-  outputDir: string;    // Chrome output directory
-  userDataDir: string;  // Chrome user data directory
+const context = getRunContext();
+const client = new ZaiClient(context);
+
+class ZaiClient {
+  constructor(context: RunContext)
+  async getUsageQuota(): Promise<ZaiLimit[]>
 }
 
 interface ZaiLimit {

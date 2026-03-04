@@ -1,83 +1,84 @@
-/**
- * Z.ai client for fetching usage data via Playwright
- */
-
 import { chromium } from 'playwright';
 import type { ZaiUsageResponse, ZaiLimit } from './types.js';
-
-export interface ZaiConfig {
-  outputDir: string;
-  userDataDir: string;
-}
+import type { RunContext } from '../config/index.js';
 
 export class ZaiClient {
-  private config: ZaiConfig;
+  private context: RunContext;
 
-  constructor(config: ZaiConfig) {
-    this.config = config;
+  constructor(context: RunContext) {
+    this.context = context;
   }
 
   async getUsageQuota(): Promise<ZaiLimit[]> {
-    const context = await chromium.launchPersistentContext(this.config.userDataDir, {
-      headless: true,
-      channel: 'chrome',
-    });
+    const timeout = this.context.timeouts.zai;
+    const userDataDir = this.context.zai.userDataDir;
+    
+    let browserContext;
+    try {
+      browserContext = await chromium.launchPersistentContext(userDataDir, {
+        headless: true,
+        channel: 'chrome',
+        args: [
+          '--use-mock-keychain',
+          '--disable-features=IsolateOrigins,site-per-process',
+        ],
+      });
+    } catch (error) {
+      throw new Error(`Failed to launch Chrome: ${error instanceof Error ? error.message : String(error)}`);
+    }
 
     try {
-      const page = await context.newPage();
+      const page = await browserContext.newPage();
 
-      // Listen for the usage API response BEFORE navigation
       let apiResponse: ZaiUsageResponse | null = null;
-      let responseResolved = false;
+      let responseResolve: (value: ZaiUsageResponse) => void;
+      let responseReject: (error: Error) => void;
+      
       const responsePromise = new Promise<ZaiUsageResponse>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          if (!responseResolved) {
-            reject(new Error('Timeout waiting for usage API'));
-          }
-        }, 30000);
-
-        page.on('response', async (response) => {
-          const url = response.url();
-          // The API is on api.z.ai subdomain
-          if (url.includes('api.z.ai/api/monitor/usage/quota/limit') && !responseResolved) {
-            clearTimeout(timeout);
-            responseResolved = true;
-            try {
-              const body = await response.json();
-              resolve(body as ZaiUsageResponse);
-            } catch (error) {
-              reject(error);
-            }
-          }
-        });
+        responseResolve = resolve;
+        responseReject = reject;
       });
 
-      // Navigate to the subscription page - use 'load' instead of 'networkidle'
-      await page.goto('https://z.ai/manage-apikey/subscription', { waitUntil: 'load', timeout: 30000 });
+      const timeoutId = setTimeout(() => {
+        responseReject!(new Error('Timeout waiting for usage API - you may need to log in to z.ai first'));
+      }, timeout);
 
-      // Wait for the page to settle and for dynamic content to load
+      page.on('response', async (response) => {
+        const url = response.url();
+        if (url.includes('api.z.ai/api/monitor/usage/quota/limit')) {
+          clearTimeout(timeoutId);
+          try {
+            const body = await response.json();
+            responseResolve!(body as ZaiUsageResponse);
+          } catch (error) {
+            responseReject!(error instanceof Error ? error : new Error(String(error)));
+          }
+        }
+      });
+
+      await page.goto('https://z.ai/manage-apikey/subscription', { 
+        waitUntil: 'load', 
+        timeout 
+      });
+
       await page.waitForTimeout(3000);
 
-      // Wait for the Usage tab to be available and click it
-      try {
-        await page.waitForSelector('[role="tab"]', { timeout: 10000 });
-
-        // Click the Usage tab using Playwright's built-in selector
-        const usageTab = page.locator('[role="tab"]').filter({ hasText: 'Usage' });
-
-        // Wait for the tab to be visible and enabled
-        await usageTab.waitFor({ state: 'visible', timeout: 10000 });
-
-        // Click with increased timeout
-        await usageTab.click({ timeout: 10000 });
-
-        // Give some time for the API call to be made after clicking
-        await page.waitForTimeout(2000);
-      } catch (error) {
-        throw new Error('Failed to find or click Usage tab');
+      // Close any modal dialogs that might be blocking
+      const closeButton = page.locator('.ant-modal-close, [aria-label="Close"]').first();
+      if (await closeButton.count() > 0) {
+        await closeButton.click();
+        await page.waitForTimeout(500);
       }
 
-      // Wait for the API response
+      try {
+        const usageTab = page.locator('[role="tab"]').filter({ hasText: 'Usage' });
+        await usageTab.click({ force: true, timeout: 10000 });
+        await page.waitForTimeout(2000);
+      } catch {
+        clearTimeout(timeoutId);
+        throw new Error('Failed to find or click Usage tab - you may need to log in to z.ai first');
+      }
+
       apiResponse = await responsePromise;
 
       if (!apiResponse.success || apiResponse.code !== 200) {
@@ -86,7 +87,7 @@ export class ZaiClient {
 
       return apiResponse.data.limits;
     } finally {
-      await context.close();
+      await browserContext.close();
     }
   }
 }

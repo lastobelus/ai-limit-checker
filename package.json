@@ -50,7 +50,7 @@
     "CHANGELOG.md"
   ],
   "dependencies": {
-    "node-pty": "^1.1.0",
+    "node-pty": "github:microsoft/node-pty",
     "playwright": "^1.49.0",
     "which": "^6.0.0"
   },

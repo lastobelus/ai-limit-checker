@@ -1,12 +1,7 @@
-/**
- * Gemini CLI client for fetching usage stats
- */
-
 import { spawn } from 'node-pty';
-import { writeFileSync } from 'node:fs';
 import type { GeminiModelUsage } from './types.js';
+import type { RunContext } from '../config/index.js';
 
-// Function to strip ANSI escape codes
 function stripAnsiCodes(text: string): string {
   let cleaned = text.replace(/\x1b\[[0-9;]*m/g, '');
   cleaned = cleaned.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
@@ -15,65 +10,60 @@ function stripAnsiCodes(text: string): string {
 }
 
 export class GeminiClient {
+  private context: RunContext;
+
+  constructor(context: RunContext) {
+    this.context = context;
+  }
+
   async getUsageStats(): Promise<GeminiModelUsage[]> {
-    const ptyProcess = spawn('gemini', ['--yolo'], {
+    const timeout = this.context.timeouts.gemini;
+    
+    const ptyProcess = spawn('gemini', [], {
       name: 'xterm-color',
       cols: 120,
       rows: 40,
-      cwd: process.cwd(),
-      env: process.env,
+      cwd: this.context.cwd,
+      env: this.context.env,
     });
 
     let output = '';
-    let readyForInput = false;
 
     ptyProcess.onData((data) => {
       output += data;
-      if (data.includes('Type your message') || data.includes('/exit')) {
-        readyForInput = true;
+    });
+
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      if (output.includes('Type your message') || output.includes('/exit')) {
+        break;
       }
-    });
+      await this.delay(300);
+    }
 
-    // Wait for the CLI to be fully ready
-    await new Promise<void>((resolve) => {
-      const checkReady = setInterval(() => {
-        if (readyForInput) {
-          clearInterval(checkReady);
-          resolve();
-        }
-      }, 500);
-    });
-
-    // Send /stats command
+    await this.delay(500);
     ptyProcess.write('/stats\r');
+    await this.delay(5000);
 
-    // Wait for stats output
-    await new Promise((resolve) => setTimeout(resolve, 5000));
-
-    // Send exit command
     ptyProcess.write('/exit\r');
-
-    // Wait for cleanup
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await this.delay(500);
 
     ptyProcess.kill();
 
     return this.parseUsageStats(output);
   }
 
-  private parseUsageStats(output: string): GeminiModelUsage[] {
-    if (!output.includes('Resets in')) {
-      throw new Error('Failed to get usage stats from gemini CLI - "Resets in" not found in output');
-    }
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
 
-    // Normalize line endings and split
+  private parseUsageStats(output: string): GeminiModelUsage[] {
     const normalizedOutput = output.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const lines = normalizedOutput.split('\n');
     const modelUsage: GeminiModelUsage[] = [];
 
     for (const line of lines) {
       const cleanLine = stripAnsiCodes(line);
-      // Match lines like: "│  gemini-2.5-flash               -    98.6% (Resets in 2h 39m)                                                        │"
       const match = cleanLine.match(/gemini[\w.-]+\s+(-|\d+)\s+([\d.]+)%\s*\(Resets in ([^)]+)\)/);
       if (match) {
         modelUsage.push({
@@ -83,6 +73,21 @@ export class GeminiClient {
           resets: match[3],
         });
       }
+    }
+
+    if (modelUsage.length === 0) {
+      const contextMatch = normalizedOutput.match(/(\d+)%\s*context\s*left/i);
+      if (contextMatch) {
+        const contextPercent = parseInt(contextMatch[1], 10);
+        return [{
+          model: 'gemini-context',
+          requests: '-',
+          usage: (100 - contextPercent).toString(),
+          resets: 'Unknown',
+        }];
+      }
+      
+      throw new Error('Failed to parse usage data from Gemini CLI. Output format may have changed.');
     }
 
     return modelUsage;
