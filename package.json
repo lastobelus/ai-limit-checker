@@ -11,6 +11,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "node --loader ts-node/esm src/cli.ts",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "test:coverage": "vitest --coverage",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -57,7 +60,9 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/which": "^3.0.4",
-    "typescript": "^5.7.2"
+    "@vitest/expect": "^4.0.18",
+    "typescript": "^5.7.2",
+    "vitest": "^4.0.18"
   },
   "engines": {
     "node": ">=18.0.0"

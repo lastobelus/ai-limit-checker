@@ -1,7 +1,3 @@
-/**
- * Claude CLI types
- */
-
 export interface ClaudeUsageResponse {
   type: string;
   subtype: string;
@@ -30,4 +26,35 @@ export interface ClaudeStatusInfo {
   weeklyUsed: number;
   weeklyResetTime: string;
   hasSubscription: boolean;
+}
+
+export interface ClaudeCredentials {
+  claudeAiOauth: {
+    accessToken: string;
+    refreshToken?: string;
+    expiresAt?: number;
+  };
+}
+
+export interface ClaudeUsageWindow {
+  utilization?: number;
+  reset_at?: string;
+  resets_at?: string;
+  resetAt?: string;
+  resetsAt?: string;
+  window_end?: string;
+  window_end_at?: string;
+  windowEnd?: string;
+  windowEndAt?: string;
+}
+
+export interface ClaudeUsageApiResponse {
+  five_hour?: ClaudeUsageWindow;
+  seven_day?: ClaudeUsageWindow;
+  extra_usage?: {
+    is_enabled?: boolean;
+    utilization?: number;
+    used_credits?: number;
+    monthly_limit?: number;
+  };
 }

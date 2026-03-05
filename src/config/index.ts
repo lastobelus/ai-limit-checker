@@ -13,6 +13,7 @@ export interface AiLimitCheckerConfig {
     claude: number;
     gemini: number;
     zai: number;
+    codex: number;
   };
 }
 
@@ -23,6 +24,7 @@ export interface RunContext {
     claude: number;
     gemini: number;
     zai: number;
+    codex: number;
   };
   zai: {
     userDataDir: string;
@@ -52,6 +54,7 @@ const DEFAULT_TIMEOUTS = {
   claude: 60000,
   gemini: 60000,
   zai: 60000,
+  codex: 30000,
 };
 
 function getDefaultRuntimeRoot(): string {
@@ -120,6 +123,7 @@ export function loadConfig(): AiLimitCheckerConfig {
     claude: typeof rawTimeouts?.claude === 'number' ? rawTimeouts.claude : DEFAULT_TIMEOUTS.claude,
     gemini: typeof rawTimeouts?.gemini === 'number' ? rawTimeouts.gemini : DEFAULT_TIMEOUTS.gemini,
     zai: typeof rawTimeouts?.zai === 'number' ? rawTimeouts.zai : DEFAULT_TIMEOUTS.zai,
+    codex: typeof rawTimeouts?.codex === 'number' ? rawTimeouts.codex : DEFAULT_TIMEOUTS.codex,
   };
 
   const rawZai = rawConfig.zai as Record<string, unknown> | undefined;

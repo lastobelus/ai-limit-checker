@@ -3,11 +3,13 @@ import { getRunContext } from './config/index.js';
 import { ZaiClient } from './zai/client.js';
 import { GeminiClient } from './gemini/client.js';
 import { ClaudeClient } from './claude/client.js';
+import { CodexClient } from './codex/client.js';
 import type { GeminiModelUsage } from './gemini/types.js';
 import type { ClaudeStatusInfo } from './claude/types.js';
+import type { CodexStatusInfo } from './codex/types.js';
 import type { RunContext } from './config/index.js';
 
-type ProviderName = 'claude' | 'gemini' | 'zai';
+type ProviderName = 'claude' | 'gemini' | 'zai' | 'codex';
 
 function printWarning(message: string): void {
   console.error(`Warning: ${message}`);
@@ -22,12 +24,20 @@ function isCommandAvailable(command: string): boolean {
   }
 }
 
+export interface UsageWindow {
+  type: '5h' | 'weekly' | 'session' | 'other';
+  usagePercent: number;
+  resetAt?: number;
+  resetAtHuman?: string;
+}
+
 export interface LlmLimitStatus {
   provider: string;
   status: 'rate_limit_exceed' | 'available' | 'error';
   usagePercent?: number;
   resetAt?: number;
   resetAtHuman?: string;
+  windows?: UsageWindow[];
   errorMessage?: string;
   checkedAt: number;
 }
@@ -167,17 +177,6 @@ async function getGeminiStatus(context: RunContext): Promise<LlmLimitStatus> {
 
 async function getClaudeStatus(context: RunContext): Promise<LlmLimitStatus> {
   const checkedAt = Date.now();
-  
-  if (!isCommandAvailable('claude')) {
-    return {
-      provider: 'claude',
-      status: 'error',
-      resetAt: 0,
-      resetAtHuman: 'Error',
-      errorMessage: 'CLI is not available on this system',
-      checkedAt,
-    };
-  }
 
   try {
     const client = new ClaudeClient(context);
@@ -185,34 +184,36 @@ async function getClaudeStatus(context: RunContext): Promise<LlmLimitStatus> {
 
     const isRateLimited = status.sessionUsed >= 100;
 
-    let resetTime = 0;
+    let sessionResetTime = 0;
     if (status.sessionResetTime !== 'Unknown') {
-      const now = new Date();
-      const resetStr = status.sessionResetTime;
-
-      const timeMatch = resetStr.match(/(\d+)(am|pm)/i);
-      if (timeMatch) {
-        let hour = parseInt(timeMatch[1], 10);
-        if (timeMatch[2].toLowerCase() === 'pm' && hour !== 12) {
-          hour += 12;
-        } else if (timeMatch[2].toLowerCase() === 'am' && hour === 12) {
-          hour = 0;
-        }
-        const resetDate = new Date(now);
-        resetDate.setHours(hour, 0, 0, 0);
-        if (resetDate < now) {
-          resetDate.setDate(resetDate.getDate() + 1);
-        }
-        resetTime = resetDate.getTime();
-      }
+      sessionResetTime = new Date(status.sessionResetTime).getTime();
+    }
+    
+    let weeklyResetTime = 0;
+    if (status.weeklyResetTime !== 'Unknown') {
+      weeklyResetTime = new Date(status.weeklyResetTime).getTime();
     }
 
     return {
       provider: 'claude',
       status: isRateLimited ? 'rate_limit_exceed' : 'available',
       usagePercent: status.sessionUsed,
-      resetAt: resetTime,
-      resetAtHuman: resetTime > 0 ? new Date(resetTime).toISOString() : status.sessionResetTime,
+      resetAt: sessionResetTime,
+      resetAtHuman: status.sessionResetTime,
+      windows: [
+        {
+          type: '5h',
+          usagePercent: status.sessionUsed,
+          resetAt: sessionResetTime || undefined,
+          resetAtHuman: sessionResetTime > 0 ? status.sessionResetTime : undefined
+        },
+        {
+          type: 'weekly',
+          usagePercent: status.weeklyUsed,
+          resetAt: weeklyResetTime || undefined,
+          resetAtHuman: weeklyResetTime > 0 ? status.weeklyResetTime : undefined
+        }
+      ],
       checkedAt,
     };
   } catch (error) {
@@ -229,9 +230,66 @@ async function getClaudeStatus(context: RunContext): Promise<LlmLimitStatus> {
   }
 }
 
+async function getCodexStatus(context: RunContext): Promise<LlmLimitStatus> {
+  const checkedAt = Date.now();
+  
+  try {
+    const client = new CodexClient(context);
+    const status = await client.getUsageStats();
+
+    const isRateLimited = status.primaryWindowUsed >= 100;
+
+    let primaryResetTime = 0;
+    if (status.primaryWindowResetTime !== 'Unknown') {
+      primaryResetTime = new Date(status.primaryWindowResetTime).getTime();
+    }
+    
+    let secondaryResetTime = 0;
+    if (status.secondaryWindowResetTime !== 'Unknown') {
+      secondaryResetTime = new Date(status.secondaryWindowResetTime).getTime();
+    }
+
+    return {
+      provider: 'codex',
+      status: isRateLimited ? 'rate_limit_exceed' : 'available',
+      usagePercent: status.primaryWindowUsed,
+      resetAt: primaryResetTime,
+      resetAtHuman: status.primaryWindowResetTime,
+      windows: [
+        {
+          type: '5h',
+          usagePercent: status.primaryWindowUsed,
+          resetAt: primaryResetTime || undefined,
+          resetAtHuman: primaryResetTime > 0 ? status.primaryWindowResetTime : undefined
+        },
+        {
+          type: 'weekly',
+          usagePercent: status.secondaryWindowUsed,
+          resetAt: secondaryResetTime || undefined,
+          resetAtHuman: secondaryResetTime > 0 ? status.secondaryWindowResetTime : undefined
+        }
+      ],
+      checkedAt,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    printWarning(`codex check failed: ${errorMessage}`);
+    return {
+      provider: 'codex',
+      status: 'error',
+      resetAt: 0,
+      resetAtHuman: 'Error',
+      errorMessage,
+      checkedAt,
+    };
+  }
+}
+
 export async function checkLimits(tools?: ProviderName[]): Promise<LlmLimitStatus[]> {
   const context = getRunContext();
-  const providersToCheck = tools && tools.length > 0 ? tools : ['claude', 'gemini', 'zai'];
+  const providersToCheck = tools && tools.length > 0 
+    ? tools 
+    : ['claude', 'gemini', 'zai', 'codex'];
 
   const promises: Promise<LlmLimitStatus>[] = [];
 
@@ -246,6 +304,9 @@ export async function checkLimits(tools?: ProviderName[]): Promise<LlmLimitStatu
       case 'zai':
         promises.push(getZaiStatus(context));
         break;
+      case 'codex':
+        promises.push(getCodexStatus(context));
+        break;
     }
   }
 
@@ -253,5 +314,5 @@ export async function checkLimits(tools?: ProviderName[]): Promise<LlmLimitStatu
   return results;
 }
 
-export type { GeminiModelUsage, ClaudeStatusInfo, RunContext };
-export { ZaiClient, GeminiClient, ClaudeClient };
+export type { GeminiModelUsage, ClaudeStatusInfo, CodexStatusInfo, RunContext };
+export { ZaiClient, GeminiClient, ClaudeClient, CodexClient };
