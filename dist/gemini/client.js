@@ -1,4 +1,3 @@
-import { spawn } from 'node-pty';
 function stripAnsiCodes(text) {
     let cleaned = text.replace(/\x1b\[[0-9;]*m/g, '');
     cleaned = cleaned.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
@@ -12,6 +11,13 @@ export class GeminiClient {
     }
     async getUsageStats() {
         const timeout = this.context.timeouts.gemini;
+        let spawn;
+        try {
+            ({ spawn } = await import('node-pty'));
+        }
+        catch (error) {
+            throw new Error(`node-pty is required for Gemini checks but is not installed or failed to load: ${error instanceof Error ? error.message : String(error)}`);
+        }
         const ptyProcess = spawn('gemini', [], {
             name: 'xterm-color',
             cols: 120,

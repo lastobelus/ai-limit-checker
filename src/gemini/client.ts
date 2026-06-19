@@ -1,4 +1,3 @@
-import { spawn } from 'node-pty';
 import type { GeminiModelUsage } from './types.js';
 import type { RunContext } from '../config/index.js';
 
@@ -18,6 +17,12 @@ export class GeminiClient {
 
   async getUsageStats(): Promise<GeminiModelUsage[]> {
     const timeout = this.context.timeouts.gemini;
+    let spawn: typeof import('node-pty').spawn;
+    try {
+      ({ spawn } = await import('node-pty'));
+    } catch (error) {
+      throw new Error(`node-pty is required for Gemini checks but is not installed or failed to load: ${error instanceof Error ? error.message : String(error)}`);
+    }
     
     const ptyProcess = spawn('gemini', [], {
       name: 'xterm-color',
