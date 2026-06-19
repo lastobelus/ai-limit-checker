@@ -9,6 +9,9 @@ export interface AiLimitCheckerConfig {
     userDataDir: string;
     outputDir: string;
   };
+  debounceMs: {
+    claude: number;
+  };
   timeoutsMs: {
     claude: number;
     gemini: number;
@@ -18,6 +21,7 @@ export interface AiLimitCheckerConfig {
 }
 
 export interface RunContext {
+  runtimeRoot: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
   timeouts: {
@@ -25,6 +29,9 @@ export interface RunContext {
     gemini: number;
     zai: number;
     codex: number;
+  };
+  debounceMs: {
+    claude: number;
   };
   zai: {
     userDataDir: string;
@@ -57,6 +64,10 @@ const DEFAULT_TIMEOUTS = {
   codex: 30000,
 };
 
+const DEFAULT_DEBOUNCE_MS = {
+  claude: 5 * 60 * 1000,
+};
+
 function getDefaultRuntimeRoot(): string {
   return resolve(homedir(), '.ai-limit-checker-root');
 }
@@ -85,6 +96,18 @@ function ensureDirectory(path: string, description: string): string {
   return path;
 }
 
+function readNonNegativeNumber(value: unknown, fallback: number, name: string): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  if (typeof value !== 'number' || Number.isNaN(value) || value < 0) {
+    throw new Error(`Config error: ${name} must be a non-negative number, got: ${String(value)}`);
+  }
+
+  return value;
+}
+
 export function loadConfig(): AiLimitCheckerConfig {
   const configPath = getConfigPath();
   
@@ -97,6 +120,7 @@ export function loadConfig(): AiLimitCheckerConfig {
         userDataDir: resolve(runtimeRoot, 'chrome-data'),
         outputDir: resolve(runtimeRoot, 'chrome-output'),
       },
+      debounceMs: { ...DEFAULT_DEBOUNCE_MS },
       timeoutsMs: { ...DEFAULT_TIMEOUTS },
     };
   }
@@ -120,10 +144,15 @@ export function loadConfig(): AiLimitCheckerConfig {
 
   const rawTimeouts = rawConfig.timeoutsMs as Record<string, unknown> | undefined;
   const timeouts = {
-    claude: typeof rawTimeouts?.claude === 'number' ? rawTimeouts.claude : DEFAULT_TIMEOUTS.claude,
-    gemini: typeof rawTimeouts?.gemini === 'number' ? rawTimeouts.gemini : DEFAULT_TIMEOUTS.gemini,
-    zai: typeof rawTimeouts?.zai === 'number' ? rawTimeouts.zai : DEFAULT_TIMEOUTS.zai,
-    codex: typeof rawTimeouts?.codex === 'number' ? rawTimeouts.codex : DEFAULT_TIMEOUTS.codex,
+    claude: readNonNegativeNumber(rawTimeouts?.claude, DEFAULT_TIMEOUTS.claude, 'timeoutsMs.claude'),
+    gemini: readNonNegativeNumber(rawTimeouts?.gemini, DEFAULT_TIMEOUTS.gemini, 'timeoutsMs.gemini'),
+    zai: readNonNegativeNumber(rawTimeouts?.zai, DEFAULT_TIMEOUTS.zai, 'timeoutsMs.zai'),
+    codex: readNonNegativeNumber(rawTimeouts?.codex, DEFAULT_TIMEOUTS.codex, 'timeoutsMs.codex'),
+  };
+
+  const rawDebounce = rawConfig.debounceMs as Record<string, unknown> | undefined;
+  const debounceMs = {
+    claude: readNonNegativeNumber(rawDebounce?.claude, DEFAULT_DEBOUNCE_MS.claude, 'debounceMs.claude'),
   };
 
   const rawZai = rawConfig.zai as Record<string, unknown> | undefined;
@@ -142,6 +171,7 @@ export function loadConfig(): AiLimitCheckerConfig {
     runtimeRoot,
     inheritEnvAllowlist,
     zai,
+    debounceMs,
     timeoutsMs: timeouts,
   };
 }
@@ -168,9 +198,11 @@ export function createRunContext(config: AiLimitCheckerConfig): RunContext {
   const cwd = filteredEnv.HOME || homedir();
 
   return {
+    runtimeRoot: config.runtimeRoot,
     cwd,
     env: filteredEnv,
     timeouts: config.timeoutsMs,
+    debounceMs: config.debounceMs,
     zai: config.zai,
   };
 }

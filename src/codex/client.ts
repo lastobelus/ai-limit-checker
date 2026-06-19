@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import type { RunContext } from '../config/index.js';
 import type { CodexAuth, CodexUsageApiResponse, CodexStatusInfo } from './types.js';
+import { getLoginCommand } from '../login.js';
 
 export class CodexClient {
   private context: RunContext;
@@ -19,7 +20,7 @@ export class CodexClient {
       const content = await readFile(authPath, 'utf-8');
       return JSON.parse(content) as CodexAuth;
     } catch {
-      throw new Error('Not logged in. Run: codex login');
+      throw new Error(`Not logged in. Run: ${getLoginCommand('codex')}`);
     }
   }
 
@@ -91,7 +92,7 @@ export class CodexClient {
     }
     
     if (!token) {
-      throw new Error('Not logged in. Run: codex login');
+      throw new Error(`Not logged in. Run: ${getLoginCommand('codex')}`);
     }
 
     const headers: Record<string, string> = {
@@ -109,7 +110,7 @@ export class CodexClient {
 
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
-        throw new Error('Session expired. Log in to Codex again');
+        throw new Error(`Session expired. Run: ${getLoginCommand('codex')}`);
       }
       throw new Error(`Request failed: HTTP ${response.status}`);
     }

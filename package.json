@@ -1,7 +1,7 @@
 {
-  "name": "@shaharia-lab/ai-limit-checker",
-  "version": "0.0.1",
-  "description": "Check LLM provider rate limits (Claude, Gemini, z.ai) - CLI tool and library for monitoring API usage",
+  "name": "@lastobelus/ai-limit-checker",
+  "version": "0.1.0",
+  "description": "Check LLM provider rate limits (Claude, Gemini, z.ai) - CLI tool and library for monitoring API usage. Forked from shaharia-lab/ai-limit-checker with extensive modifications.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -14,6 +14,7 @@
     "test": "vitest",
     "test:watch": "vitest --watch",
     "test:coverage": "vitest --coverage",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -36,15 +37,18 @@
     "cli-tool",
     "typescript"
   ],
-  "author": "Shaharia Lab <hello@shaharia.com> (https://github.com/shaharia-lab)",
+  "contributors": [
+    "Shaharia Lab <hello@shaharia.com> (https://github.com/shaharia-lab) — original author"
+  ],
+  "author": "lastobelus (https://github.com/lastobelus)",
   "license": "MIT",
-  "homepage": "https://github.com/shaharia-lab/ai-limit-checker#readme",
+  "homepage": "https://github.com/lastobelus/ai-limit-checker#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/shaharia-lab/ai-limit-checker.git"
+    "url": "git+https://github.com/lastobelus/ai-limit-checker.git"
   },
   "bugs": {
-    "url": "https://github.com/shaharia-lab/ai-limit-checker/issues"
+    "url": "https://github.com/lastobelus/ai-limit-checker/issues"
   },
   "files": [
     "dist",

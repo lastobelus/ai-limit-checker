@@ -56,6 +56,14 @@ After installing globally, run with the `--tools` flag to specify which provider
 ai-limit-checker --tools=claude,gemini,zai
 ```
 
+To repair local auth or browser-profile state for a provider, use:
+
+```bash
+ai-limit-checker login claude
+ai-limit-checker login codex
+ai-limit-checker login zai
+```
+
 The `--tools` flag is **required** and accepts comma-separated provider names.
 
 **Example Output:**
@@ -94,7 +102,7 @@ The `--tools` flag is **required** and accepts comma-separated provider names.
 
 #### Claude
 - **Claude CLI**: Install from [claude.ai/code](https://claude.ai/code)
-- Ensure you're logged in: `claude`
+- Ensure you're logged in: `ai-limit-checker login claude`
 
 #### Gemini
 - **Gemini CLI**: Install from [Google AI Studio](https://ai.google.dev/)
@@ -103,6 +111,7 @@ The `--tools` flag is **required** and accepts comma-separated provider names.
 #### z.ai
 - **Chrome Browser**: Required for Playwright automation
 - **Environment Variables**: Configure Chrome directories (see [Configuration](#configuration))
+- Log into the persistent checker profile with: `ai-limit-checker login zai`
 
 ## Usage
 
@@ -124,6 +133,14 @@ ai-limit-checker --tools=claude,gemini
 
 # Check only z.ai
 ai-limit-checker --tools=zai
+
+# Pretty table output
+ai-limit-checker --tools=claude,codex --pretty
+
+# Repair local auth or browser-profile state
+ai-limit-checker login claude
+ai-limit-checker login codex
+ai-limit-checker login zai
 ```
 
 #### Skip Behavior
@@ -135,6 +152,32 @@ The tool will automatically skip providers that are not available on your system
 - **z.ai**: Skipped if Chrome environment variables (`CHROME_OUTPUT_DIR`, `CHROME_USER_DATA_DIR`) are not set
 
 Skipped providers will return `status: "available"` with `resetAtHuman: "Unknown (skipped)"`.
+
+#### Provider Login Repair
+
+If a provider check fails because the local session is missing or expired, the error message will tell you which `ai-limit-checker login <provider>` command to run.
+
+- `ai-limit-checker login claude` runs Claude CLI login.
+- `ai-limit-checker login codex` runs Codex CLI login.
+- `ai-limit-checker login zai` opens Chrome with the persistent ai-limit-checker z.ai profile and loads the subscription page.
+
+For z.ai, after the browser opens:
+
+1. Log in to z.ai in that Chrome window.
+2. Open the `Usage` tab once.
+3. Close the browser window.
+
+Then rerun the original `ai-limit-checker --tools=...` command.
+
+#### Pretty Output
+
+Use `--pretty` for a compact table view:
+
+```bash
+ai-limit-checker --tools=claude,codex --pretty
+```
+
+When Claude is included, the pretty header shows the configured Claude debounce window. If the current Claude result came from the debounce cache, the header marks that as `cached`.
 
 #### Integration with Shell Scripts
 
@@ -266,6 +309,11 @@ interface LlmLimitStatus {
   resetAtHuman?: string;                                 // ISO 8601 formatted date string
   errorMessage?: string;                                 // Error message if status is 'error'
   checkedAt: number;                                     // Unix timestamp (ms) when check was performed
+  debounce?: {
+    waitMs: number;                                      // Claude-only debounce window
+    source: 'live' | 'cache';                            // Whether Claude was fetched live or reused from cache
+    expiresAt?: number;                                  // When the cached Claude result expires
+  };
 }
 ```
 
@@ -380,10 +428,14 @@ The tool loads configuration from `~/.config/ai-limit-checker/config.json`. If n
     "userDataDir": "/path/to/chrome-data",
     "outputDir": "/path/to/chrome-output"
   },
+  "debounceMs": {
+    "claude": 300000
+  },
   "timeoutsMs": {
     "claude": 30000,
     "gemini": 30000,
-    "zai": 45000
+    "zai": 45000,
+    "codex": 30000
   }
 }
 ```
@@ -393,11 +445,12 @@ The tool loads configuration from `~/.config/ai-limit-checker/config.json`. If n
 - `inheritEnvAllowlist`: Environment variables passed to provider subprocesses (others are filtered)
 - `zai.userDataDir`: Chrome user data directory for z.ai automation
 - `zai.outputDir`: Chrome output directory
+- `debounceMs.claude`: Claude-only persistent debounce window in milliseconds. Defaults to `300000` (5 minutes). Set to `0` to disable.
 - `timeoutsMs`: Per-provider timeouts in milliseconds
 
 ### z.ai Chrome Setup
 
-z.ai requires Chrome browser automation using Playwright. Follow these steps:
+`ai-limit-checker login zai` opens a normal Chrome window with the persistent checker profile so Google-backed sign-in flows do not see an automated browser banner. The usage checker itself still uses Playwright after login is complete.
 
 #### 1. Create Required Directories
 
@@ -407,7 +460,13 @@ mkdir -p ~/.ai-limit-checker-root/chrome-data
 
 #### 2. Set Up Chrome User Data
 
-Launch Chrome with the persistent user data directory and log into z.ai:
+The easiest path is:
+
+```bash
+ai-limit-checker login zai
+```
+
+If you need to launch Chrome manually with the persistent user data directory instead, use:
 
 ```bash
 # macOS
@@ -422,7 +481,7 @@ google-chrome --user-data-dir="$HOME/.ai-limit-checker-root/chrome-data" https:/
 1. In the Chrome window that opens, log in to z.ai (Google, Email, or GitHub)
 2. Close the browser window when done
 
-**Note:** The tool uses `--use-mock-keychain` to avoid repeated keychain password prompts on macOS.
+**Note:** On macOS, `ai-limit-checker login zai` uses `open -W -n -a "Google Chrome" --args ...` so the login runs in a regular Chrome instance with the checker profile.
 
 #### 4. Verify Configuration
 

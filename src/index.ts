@@ -1,4 +1,6 @@
 import which from 'which';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import { getRunContext } from './config/index.js';
 import { ZaiClient } from './zai/client.js';
 import { GeminiClient } from './gemini/client.js';
@@ -40,12 +42,96 @@ export interface LlmLimitStatus {
   windows?: UsageWindow[];
   errorMessage?: string;
   checkedAt: number;
+  debounce?: {
+    waitMs: number;
+    source: 'live' | 'cache';
+    expiresAt?: number;
+  };
 }
 
 interface ZaiLimit {
   type: string;
+  unit?: number;
   nextResetTime?: number;
   percentage: number;
+}
+
+interface ClaudeCacheRecord {
+  status: LlmLimitStatus;
+}
+
+function getClaudeCachePath(context: RunContext): string {
+  return resolve(context.runtimeRoot, 'cache', 'claude-status.json');
+}
+
+function withClaudeDebounce(
+  status: LlmLimitStatus,
+  debounceMs: number,
+  source: 'live' | 'cache'
+): LlmLimitStatus {
+  return {
+    ...status,
+    debounce: {
+      waitMs: debounceMs,
+      source,
+      expiresAt: debounceMs > 0 ? status.checkedAt + debounceMs : undefined,
+    },
+  };
+}
+
+function isClaudeCacheRecord(value: unknown): value is ClaudeCacheRecord {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as { status?: Partial<LlmLimitStatus> };
+  return candidate.status?.provider === 'claude'
+    && typeof candidate.status.checkedAt === 'number'
+    && typeof candidate.status.status === 'string';
+}
+
+async function readClaudeStatusCache(context: RunContext, now: number): Promise<LlmLimitStatus | null> {
+  const debounceMs = context.debounceMs.claude;
+  if (debounceMs <= 0) {
+    return null;
+  }
+
+  try {
+    const content = await readFile(getClaudeCachePath(context), 'utf-8');
+    const parsed: unknown = JSON.parse(content);
+    if (!isClaudeCacheRecord(parsed)) {
+      return null;
+    }
+
+    const { status } = parsed;
+    if (status.status === 'error') {
+      return null;
+    }
+
+    if (now - status.checkedAt >= debounceMs) {
+      return null;
+    }
+
+    return withClaudeDebounce(status, debounceMs, 'cache');
+  } catch {
+    return null;
+  }
+}
+
+async function writeClaudeStatusCache(context: RunContext, status: LlmLimitStatus): Promise<void> {
+  const debounceMs = context.debounceMs.claude;
+  if (debounceMs <= 0 || status.status === 'error') {
+    return;
+  }
+
+  try {
+    const cachePath = getClaudeCachePath(context);
+    await mkdir(dirname(cachePath), { recursive: true });
+    await writeFile(cachePath, JSON.stringify({ status }, null, 2), 'utf-8');
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    printWarning(`claude cache write failed: ${errorMessage}`);
+  }
 }
 
 function parseZaiResetTime(timestamp?: number): { resetAt: number; human: string } {
@@ -88,16 +174,38 @@ async function getZaiStatus(context: RunContext): Promise<LlmLimitStatus> {
     const client = new ZaiClient(context);
     const limits = await client.getUsageQuota();
 
-    const tokensLimit = limits.find((limit) => limit.type === 'TOKENS_LIMIT');
-    if (tokensLimit) {
-      const isRateLimited = tokensLimit.percentage >= 100;
-      const { resetAt, human } = parseZaiResetTime(tokensLimit.nextResetTime);
+    const tokenLimits = limits.filter((limit) => limit.type === 'TOKENS_LIMIT');
+    const fiveHourLimit = tokenLimits.find((limit) => limit.unit === 3) ?? tokenLimits[0];
+    const weeklyLimit = tokenLimits.find((limit) => limit.unit === 6);
+
+    if (fiveHourLimit) {
+      const isRateLimited = fiveHourLimit.percentage >= 100;
+      const { resetAt, human } = parseZaiResetTime(fiveHourLimit.nextResetTime);
+      const windows: UsageWindow[] = [];
+      windows.push({
+        type: '5h',
+        usagePercent: fiveHourLimit.percentage,
+        resetAt,
+        resetAtHuman: human,
+      });
+
+      if (weeklyLimit) {
+        const weeklyReset = parseZaiResetTime(weeklyLimit.nextResetTime);
+        windows.push({
+          type: 'weekly',
+          usagePercent: weeklyLimit.percentage,
+          resetAt: weeklyReset.resetAt,
+          resetAtHuman: weeklyReset.human,
+        });
+      }
+
       return {
         provider: 'zai',
         status: isRateLimited ? 'rate_limit_exceed' : 'available',
-        usagePercent: tokensLimit.percentage,
+        usagePercent: fiveHourLimit.percentage,
         resetAt,
         resetAtHuman: human,
+        windows,
         checkedAt,
       };
     }
@@ -177,6 +285,10 @@ async function getGeminiStatus(context: RunContext): Promise<LlmLimitStatus> {
 
 async function getClaudeStatus(context: RunContext): Promise<LlmLimitStatus> {
   const checkedAt = Date.now();
+  const cached = await readClaudeStatusCache(context, checkedAt);
+  if (cached) {
+    return cached;
+  }
 
   try {
     const client = new ClaudeClient(context);
@@ -194,7 +306,7 @@ async function getClaudeStatus(context: RunContext): Promise<LlmLimitStatus> {
       weeklyResetTime = new Date(status.weeklyResetTime).getTime();
     }
 
-    return {
+    const result = withClaudeDebounce({
       provider: 'claude',
       status: isRateLimited ? 'rate_limit_exceed' : 'available',
       usagePercent: status.sessionUsed,
@@ -215,18 +327,21 @@ async function getClaudeStatus(context: RunContext): Promise<LlmLimitStatus> {
         }
       ],
       checkedAt,
-    };
+    }, context.debounceMs.claude, 'live');
+
+    await writeClaudeStatusCache(context, result);
+    return result;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     printWarning(`claude check failed: ${errorMessage}`);
-    return {
+    return withClaudeDebounce({
       provider: 'claude',
       status: 'error',
       resetAt: 0,
       resetAtHuman: 'Error',
       errorMessage,
       checkedAt,
-    };
+    }, context.debounceMs.claude, 'live');
   }
 }
 

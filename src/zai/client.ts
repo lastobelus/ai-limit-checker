@@ -1,6 +1,7 @@
-import { chromium } from 'playwright';
+import { chromium, type Page } from 'playwright';
 import type { ZaiUsageResponse, ZaiLimit } from './types.js';
 import type { RunContext } from '../config/index.js';
+import { getLoginCommand } from '../login.js';
 
 export class ZaiClient {
   private context: RunContext;
@@ -9,8 +10,58 @@ export class ZaiClient {
     this.context = context;
   }
 
+  private async waitForUsageQuotaResponse(page: Page, timeout: number): Promise<ZaiUsageResponse> {
+    const response = await page.waitForResponse(
+      (candidate) => candidate.url().includes('api.z.ai/api/monitor/usage/quota/limit'),
+      { timeout }
+    );
+
+    return await response.json() as ZaiUsageResponse;
+  }
+
+  private async closeBlockingDialogs(page: Page): Promise<void> {
+    const closeButton = page.locator('.ant-modal-close, [aria-label="Close"]').first();
+    if (await closeButton.count() > 0) {
+      await closeButton.click();
+      await page.waitForTimeout(500);
+    }
+  }
+
+  private async clickUsageNavigation(page: Page): Promise<void> {
+    const usageTargets = [
+      page.getByRole('link', { name: /^Usage$/i }).first(),
+      page.getByRole('tab', { name: /Usage/i }).first(),
+      page.locator('a[href*="/usage"]').first(),
+      page.locator('[role="tab"]').filter({ hasText: /Usage/i }).first(),
+    ];
+
+    for (const target of usageTargets) {
+      if (await target.count() === 0) {
+        continue;
+      }
+
+      await target.click({ force: true, timeout: 10000 });
+      return;
+    }
+
+    const navigationLabels = await page
+      .locator('a, [role="tab"], button')
+      .evaluateAll((nodes) => nodes
+        .map((node) => node.textContent?.trim())
+        .filter((text): text is string => Boolean(text))
+        .slice(0, 20))
+      .catch(() => []);
+
+    const labels = navigationLabels.length > 0
+      ? ` Visible navigation: ${navigationLabels.join(', ')}`
+      : '';
+
+    throw new Error(`Failed to find or click Usage navigation.${labels} Run: ${getLoginCommand('zai')}`);
+  }
+
   async getUsageQuota(): Promise<ZaiLimit[]> {
     const timeout = this.context.timeouts.zai;
+    const usageResponseTimeout = Math.min(timeout, 30000);
     const userDataDir = this.context.zai.userDataDir;
     
     let browserContext;
@@ -31,55 +82,22 @@ export class ZaiClient {
       const page = await browserContext.newPage();
 
       let apiResponse: ZaiUsageResponse | null = null;
-      let responseResolve: (value: ZaiUsageResponse) => void;
-      let responseReject: (error: Error) => void;
-      
-      const responsePromise = new Promise<ZaiUsageResponse>((resolve, reject) => {
-        responseResolve = resolve;
-        responseReject = reject;
-      });
 
-      const timeoutId = setTimeout(() => {
-        responseReject!(new Error('Timeout waiting for usage API - you may need to log in to z.ai first'));
-      }, timeout);
-
-      page.on('response', async (response) => {
-        const url = response.url();
-        if (url.includes('api.z.ai/api/monitor/usage/quota/limit')) {
-          clearTimeout(timeoutId);
-          try {
-            const body = await response.json();
-            responseResolve!(body as ZaiUsageResponse);
-          } catch (error) {
-            responseReject!(error instanceof Error ? error : new Error(String(error)));
-          }
-        }
-      });
-
-      await page.goto('https://z.ai/manage-apikey/subscription', { 
+      const responsePromise = this.waitForUsageQuotaResponse(page, usageResponseTimeout);
+      await page.goto('https://z.ai/manage-apikey/coding-plan/personal/usage', {
         waitUntil: 'load', 
         timeout 
       });
 
-      await page.waitForTimeout(3000);
-
-      // Close any modal dialogs that might be blocking
-      const closeButton = page.locator('.ant-modal-close, [aria-label="Close"]').first();
-      if (await closeButton.count() > 0) {
-        await closeButton.click();
-        await page.waitForTimeout(500);
-      }
+      await this.closeBlockingDialogs(page);
 
       try {
-        const usageTab = page.locator('[role="tab"]').filter({ hasText: 'Usage' });
-        await usageTab.click({ force: true, timeout: 10000 });
-        await page.waitForTimeout(2000);
+        apiResponse = await responsePromise;
       } catch {
-        clearTimeout(timeoutId);
-        throw new Error('Failed to find or click Usage tab - you may need to log in to z.ai first');
+        const fallbackResponsePromise = this.waitForUsageQuotaResponse(page, usageResponseTimeout);
+        await this.clickUsageNavigation(page);
+        apiResponse = await fallbackResponsePromise;
       }
-
-      apiResponse = await responsePromise;
 
       if (!apiResponse.success || apiResponse.code !== 200) {
         throw new Error(`Z.ai API error: ${apiResponse.msg}`);

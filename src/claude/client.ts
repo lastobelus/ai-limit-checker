@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as os from 'os';
 import type { RunContext } from '../config/index.js';
 import type { ClaudeCredentials, ClaudeUsageApiResponse, ClaudeStatusInfo } from './types.js';
+import { getLoginCommand } from '../login.js';
 
 const execAsync = promisify(exec);
 
@@ -46,7 +47,7 @@ export class ClaudeClient {
       token = await this.getTokenFromKeychain();
     }
     if (!token) {
-      throw new Error('Not logged in. Run: claude /login');
+      throw new Error(`Not logged in. Run: ${getLoginCommand('claude')}`);
     }
     return token;
   }
@@ -100,7 +101,7 @@ export class ClaudeClient {
     
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) {
-        throw new Error('Session expired. Run: claude /login');
+        throw new Error(`Session expired. Run: ${getLoginCommand('claude')}`);
       }
       throw new Error(`Request failed: HTTP ${response.status}`);
     }
