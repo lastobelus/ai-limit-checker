@@ -299,12 +299,19 @@ async function getCodexStatus(context) {
                 resetAtHuman: secondaryResetTime > 0 ? status.secondaryWindowResetTime : undefined
             });
         }
+        const activeUsage = status.primaryWindowUsed ?? status.secondaryWindowUsed;
+        const activeResetTime = status.primaryWindowUsed !== undefined
+            ? primaryResetTime
+            : secondaryResetTime;
+        const activeResetTimeHuman = status.primaryWindowUsed !== undefined
+            ? status.primaryWindowResetTime
+            : status.secondaryWindowResetTime;
         return {
             provider: 'codex',
             status: isRateLimited ? 'rate_limit_exceed' : 'available',
-            usagePercent: status.primaryWindowUsed,
-            resetAt: primaryResetTime,
-            resetAtHuman: status.primaryWindowResetTime,
+            usagePercent: activeUsage,
+            resetAt: activeResetTime,
+            resetAtHuman: activeResetTimeHuman,
             windows,
             checkedAt,
         };

@@ -25,6 +25,7 @@ function get5hWindow(result: LlmLimitStatus): { usage: number | undefined; reset
     if (w5h) {
       return { usage: w5h.usagePercent, reset: formatTimestamp(w5h.resetAt) };
     }
+    return { usage: undefined, reset: 'Unknown' };
   }
   return { usage: result.usagePercent, reset: formatTimestamp(result.resetAt) };
 }

@@ -38,6 +38,8 @@ describe('formatPrettyOutput', () => {
     const output = formatPrettyOutput([{
       provider: 'codex',
       status: 'available',
+      usagePercent: 13,
+      resetAt: new Date('2024-01-07T00:00:00Z').getTime(),
       windows: [{
         type: 'weekly',
         usagePercent: 13,
