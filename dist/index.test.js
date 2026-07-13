@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const { getRunContextMock, getClaudeUsageStatsMock, mkdirMock, readFileMock, writeFileMock, } = vi.hoisted(() => ({
+const { getRunContextMock, getClaudeUsageStatsMock, getCodexUsageStatsMock, mkdirMock, readFileMock, writeFileMock, } = vi.hoisted(() => ({
     getRunContextMock: vi.fn(),
     getClaudeUsageStatsMock: vi.fn(),
+    getCodexUsageStatsMock: vi.fn(),
     mkdirMock: vi.fn(),
     readFileMock: vi.fn(),
     writeFileMock: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock('./zai/client.js', () => ({
 }));
 vi.mock('./codex/client.js', () => ({
     CodexClient: class {
+        getUsageStats = getCodexUsageStatsMock;
     },
 }));
 import { checkLimits } from './index.js';
@@ -128,6 +130,26 @@ describe('checkLimits Claude debounce', () => {
             expiresAt: undefined,
         });
         expect(writeFileMock).not.toHaveBeenCalled();
+    });
+    it('uses the weekly Codex window for top-level status when the 5h window is unavailable', async () => {
+        getCodexUsageStatsMock.mockResolvedValue({
+            primaryWindowUsed: undefined,
+            primaryWindowResetTime: 'Unknown',
+            secondaryWindowUsed: 13,
+            secondaryWindowResetTime: '2024-01-07T00:00:00.000Z',
+        });
+        const [result] = await checkLimits(['codex']);
+        expect(result).toMatchObject({
+            provider: 'codex',
+            status: 'available',
+            usagePercent: 13,
+            resetAt: new Date('2024-01-07T00:00:00.000Z').getTime(),
+            resetAtHuman: '2024-01-07T00:00:00.000Z',
+            windows: [{
+                    type: 'weekly',
+                    usagePercent: 13,
+                }],
+        });
     });
 });
 //# sourceMappingURL=index.test.js.map

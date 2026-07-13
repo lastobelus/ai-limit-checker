@@ -8,6 +8,7 @@ export interface CodexAuth {
 
 export interface CodexUsageWindow {
   used_percent?: number;
+  limit_window_seconds?: number;
   reset_at?: number | string;
   resets_at?: number | string;
   resetAt?: number | string;
@@ -26,8 +27,8 @@ export interface CodexUsageApiResponse {
 }
 
 export interface CodexStatusInfo {
-  primaryWindowUsed: number;
+  primaryWindowUsed?: number;
   primaryWindowResetTime: string;
-  secondaryWindowUsed: number;
+  secondaryWindowUsed?: number;
   secondaryWindowResetTime: string;
 }

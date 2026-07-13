@@ -272,7 +272,8 @@ async function getCodexStatus(context) {
     try {
         const client = new CodexClient(context);
         const status = await client.getUsageStats();
-        const isRateLimited = status.primaryWindowUsed >= 100;
+        const isRateLimited = (status.primaryWindowUsed ?? 0) >= 100
+            || (status.secondaryWindowUsed ?? 0) >= 100;
         let primaryResetTime = 0;
         if (status.primaryWindowResetTime !== 'Unknown') {
             primaryResetTime = new Date(status.primaryWindowResetTime).getTime();
@@ -281,26 +282,37 @@ async function getCodexStatus(context) {
         if (status.secondaryWindowResetTime !== 'Unknown') {
             secondaryResetTime = new Date(status.secondaryWindowResetTime).getTime();
         }
+        const windows = [];
+        if (status.primaryWindowUsed !== undefined) {
+            windows.push({
+                type: '5h',
+                usagePercent: status.primaryWindowUsed,
+                resetAt: primaryResetTime || undefined,
+                resetAtHuman: primaryResetTime > 0 ? status.primaryWindowResetTime : undefined
+            });
+        }
+        if (status.secondaryWindowUsed !== undefined) {
+            windows.push({
+                type: 'weekly',
+                usagePercent: status.secondaryWindowUsed,
+                resetAt: secondaryResetTime || undefined,
+                resetAtHuman: secondaryResetTime > 0 ? status.secondaryWindowResetTime : undefined
+            });
+        }
+        const activeUsage = status.primaryWindowUsed ?? status.secondaryWindowUsed;
+        const activeResetTime = status.primaryWindowUsed !== undefined
+            ? primaryResetTime
+            : secondaryResetTime;
+        const activeResetTimeHuman = status.primaryWindowUsed !== undefined
+            ? status.primaryWindowResetTime
+            : status.secondaryWindowResetTime;
         return {
             provider: 'codex',
             status: isRateLimited ? 'rate_limit_exceed' : 'available',
-            usagePercent: status.primaryWindowUsed,
-            resetAt: primaryResetTime,
-            resetAtHuman: status.primaryWindowResetTime,
-            windows: [
-                {
-                    type: '5h',
-                    usagePercent: status.primaryWindowUsed,
-                    resetAt: primaryResetTime || undefined,
-                    resetAtHuman: primaryResetTime > 0 ? status.primaryWindowResetTime : undefined
-                },
-                {
-                    type: 'weekly',
-                    usagePercent: status.secondaryWindowUsed,
-                    resetAt: secondaryResetTime || undefined,
-                    resetAtHuman: secondaryResetTime > 0 ? status.secondaryWindowResetTime : undefined
-                }
-            ],
+            usagePercent: activeUsage,
+            resetAt: activeResetTime,
+            resetAtHuman: activeResetTimeHuman,
+            windows,
             checkedAt,
         };
     }

@@ -25,8 +25,9 @@ function get5hWindow(result) {
         if (w5h) {
             return { usage: w5h.usagePercent, reset: formatTimestamp(w5h.resetAt) };
         }
+        return { usage: undefined, reset: 'Unknown' };
     }
-    return { usage: result.usagePercent ?? 0, reset: formatTimestamp(result.resetAt) };
+    return { usage: result.usagePercent, reset: formatTimestamp(result.resetAt) };
 }
 function getWeeklyWindow(result) {
     if (result.windows) {
@@ -35,10 +36,10 @@ function getWeeklyWindow(result) {
             return { usage: weekly.usagePercent, reset: formatTimestamp(weekly.resetAt) };
         }
     }
-    return { usage: 0, reset: 'Unknown' };
+    return { usage: undefined, reset: 'Unknown' };
 }
 function formatStatus(result) {
-    const usage = get5hWindow(result).usage;
+    const usage = get5hWindow(result).usage ?? 0;
     if (result.status === 'error') {
         return colors.error('⚠️  error');
     }
@@ -147,8 +148,8 @@ export function formatPrettyOutput(results) {
         const weekly = getWeeklyWindow(result);
         const provider = padRight(colors.projectName(result.provider), colWidths.provider);
         const status = padRight(formatStatus(result), colWidths.status);
-        const usage5h = padRight(formatUsage(w5h.usage), colWidths.usage5h);
-        const usageWeekly = padRight(weekly.usage > 0 ? formatUsage(weekly.usage) : colors.dim('-'), colWidths.usageWeekly);
+        const usage5h = padRight(w5h.usage === undefined ? colors.dim('-') : formatUsage(w5h.usage), colWidths.usage5h);
+        const usageWeekly = padRight(weekly.usage === undefined ? colors.dim('-') : formatUsage(weekly.usage), colWidths.usageWeekly);
         let resetDisplay = colors.dim('-');
         if (result.status === 'error') {
             resetDisplay = colors.error(result.errorMessage ?? 'Error');
@@ -160,7 +161,7 @@ export function formatPrettyOutput(results) {
             resetDisplay = colors.dim(weekly.reset);
         }
         lines.push(provider + status + usage5h + usageWeekly + padLeft(resetDisplay, colWidths.reset));
-        if (result.status !== 'error' && weekly.usage > 0 && weekly.reset !== 'Unknown' && weekly.reset !== w5h.reset) {
+        if (result.status !== 'error' && weekly.usage !== undefined && weekly.reset !== 'Unknown' && weekly.reset !== w5h.reset) {
             const indent = colWidths.provider + colWidths.status + colWidths.usage5h + colWidths.usageWeekly;
             const weeklyLabel = colors.lowkey('Weekly: ');
             const weeklyTs = colors.dim(weekly.reset);
