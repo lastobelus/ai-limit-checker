@@ -117,20 +117,26 @@ export class CodexClient {
 
     const data = await response.json() as CodexUsageApiResponse;
     
-    const primary = data.rate_limit?.primary_window?.used_percent || 0;
-    const primaryReset = this.extractResetTimestamp(data.rate_limit?.primary_window);
+    const apiPrimary = data.rate_limit?.primary_window;
+    const apiSecondary = data.rate_limit?.secondary_window;
+    const primaryIsWeekly = apiPrimary?.limit_window_seconds === 7 * 24 * 60 * 60;
+    const primaryWindow = primaryIsWeekly ? undefined : apiPrimary;
+    const secondaryWindow = primaryIsWeekly ? apiPrimary : apiSecondary;
+
+    const primary = primaryWindow?.used_percent;
+    const primaryReset = this.extractResetTimestamp(primaryWindow);
     const primaryResetEpoch = primaryReset ? this.normalizeTimestamp(primaryReset) : 0;
     
-    const secondary = data.rate_limit?.secondary_window?.used_percent || 0;
-    const secondaryReset = this.extractResetTimestamp(data.rate_limit?.secondary_window);
+    const secondary = secondaryWindow?.used_percent;
+    const secondaryReset = this.extractResetTimestamp(secondaryWindow);
     const secondaryResetEpoch = secondaryReset ? this.normalizeTimestamp(secondaryReset) : 0;
 
     return {
-      primaryWindowUsed: Math.floor(primary),
+      primaryWindowUsed: primary === undefined ? undefined : Math.floor(primary),
       primaryWindowResetTime: primaryResetEpoch > 0 
         ? new Date(primaryResetEpoch * 1000).toISOString()
         : 'Unknown',
-      secondaryWindowUsed: Math.floor(secondary),
+      secondaryWindowUsed: secondary === undefined ? undefined : Math.floor(secondary),
       secondaryWindowResetTime: secondaryResetEpoch > 0 
         ? new Date(secondaryResetEpoch * 1000).toISOString()
         : 'Unknown'

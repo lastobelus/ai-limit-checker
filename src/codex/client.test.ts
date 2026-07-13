@@ -175,6 +175,31 @@ describe('CodexClient', () => {
       );
     });
 
+    it('recognizes a weekly window promoted to primary when the 5h limit is disabled', async () => {
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({
+        tokens: { access_token: 'test-token' }
+      }));
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          rate_limit: {
+            primary_window: {
+              used_percent: 13.9,
+              reset_at: '2024-01-07T00:00:00Z',
+              limit_window_seconds: 604800
+            }
+          }
+        })
+      });
+
+      const status = await client.getUsageStats();
+
+      expect(status.primaryWindowUsed).toBeUndefined();
+      expect(status.primaryWindowResetTime).toBe('Unknown');
+      expect(status.secondaryWindowUsed).toBe(13);
+      expect(status.secondaryWindowResetTime).toBe('2024-01-07T00:00:00.000Z');
+    });
+
     it('should throw error when not logged in', async () => {
       vi.mocked(fs.readFile).mockRejectedValue(new Error('ENOENT'));
       
@@ -210,8 +235,8 @@ describe('CodexClient', () => {
       
       const status = await client.getUsageStats();
       
-      expect(status.primaryWindowUsed).toBe(0);
-      expect(status.secondaryWindowUsed).toBe(0);
+      expect(status.primaryWindowUsed).toBeUndefined();
+      expect(status.secondaryWindowUsed).toBeUndefined();
       expect(status.primaryWindowResetTime).toBe('Unknown');
       expect(status.secondaryWindowResetTime).toBe('Unknown');
     });

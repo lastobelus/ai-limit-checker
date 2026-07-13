@@ -352,7 +352,8 @@ async function getCodexStatus(context: RunContext): Promise<LlmLimitStatus> {
     const client = new CodexClient(context);
     const status = await client.getUsageStats();
 
-    const isRateLimited = status.primaryWindowUsed >= 100;
+    const isRateLimited = (status.primaryWindowUsed ?? 0) >= 100
+      || (status.secondaryWindowUsed ?? 0) >= 100;
 
     let primaryResetTime = 0;
     if (status.primaryWindowResetTime !== 'Unknown') {
@@ -364,26 +365,31 @@ async function getCodexStatus(context: RunContext): Promise<LlmLimitStatus> {
       secondaryResetTime = new Date(status.secondaryWindowResetTime).getTime();
     }
 
+    const windows: UsageWindow[] = [];
+    if (status.primaryWindowUsed !== undefined) {
+      windows.push({
+        type: '5h',
+        usagePercent: status.primaryWindowUsed,
+        resetAt: primaryResetTime || undefined,
+        resetAtHuman: primaryResetTime > 0 ? status.primaryWindowResetTime : undefined
+      });
+    }
+    if (status.secondaryWindowUsed !== undefined) {
+      windows.push({
+        type: 'weekly',
+        usagePercent: status.secondaryWindowUsed,
+        resetAt: secondaryResetTime || undefined,
+        resetAtHuman: secondaryResetTime > 0 ? status.secondaryWindowResetTime : undefined
+      });
+    }
+
     return {
       provider: 'codex',
       status: isRateLimited ? 'rate_limit_exceed' : 'available',
       usagePercent: status.primaryWindowUsed,
       resetAt: primaryResetTime,
       resetAtHuman: status.primaryWindowResetTime,
-      windows: [
-        {
-          type: '5h',
-          usagePercent: status.primaryWindowUsed,
-          resetAt: primaryResetTime || undefined,
-          resetAtHuman: primaryResetTime > 0 ? status.primaryWindowResetTime : undefined
-        },
-        {
-          type: 'weekly',
-          usagePercent: status.secondaryWindowUsed,
-          resetAt: secondaryResetTime || undefined,
-          resetAtHuman: secondaryResetTime > 0 ? status.secondaryWindowResetTime : undefined
-        }
-      ],
+      windows,
       checkedAt,
     };
   } catch (error) {

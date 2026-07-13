@@ -33,4 +33,21 @@ describe('formatPrettyOutput', () => {
 
     expect(output).toContain('Claude debounce: 5m (cached)');
   });
+
+  it('leaves 5h usage empty when only the weekly Codex window is available', () => {
+    const output = formatPrettyOutput([{
+      provider: 'codex',
+      status: 'available',
+      windows: [{
+        type: 'weekly',
+        usagePercent: 13,
+        resetAt: new Date('2024-01-07T00:00:00Z').getTime(),
+      }],
+      checkedAt: 10_000,
+    }]);
+    const codexRow = (output.split('\n').find(line => line.includes('codex')) ?? '')
+      .replace(/\x1b\[[0-9;]*m/g, '');
+
+    expect(codexRow).toMatch(/codex\s+✅ available\s+-\s+13%/);
+  });
 });
